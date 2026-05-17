@@ -1,10 +1,9 @@
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const bcryptjs = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs').promises;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,38 +13,46 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// Database setup
-const dbPath = path.join(__dirname, 'jewelry.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) console.error('Database connection error:', err);
-  else console.log('Connected to SQLite database');
-});
+const dbPath = path.join(__dirname, 'data.json');
+let store = {
+  users: [],
+  projects: [],
+  nextUserId: 1,
+  nextProjectId: 1
+};
 
-// Initialize database tables
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      username TEXT UNIQUE NOT NULL,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+async function loadStore() {
+  try {
+    const raw = await fs.readFile(dbPath, 'utf8');
+    const data = JSON.parse(raw);
+    store = {
+      users: data.users || [],
+      projects: data.projects || [],
+      nextUserId: data.nextUserId || 1,
+      nextProjectId: data.nextProjectId || 1
+    };
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      await saveStore();
+    } else {
+      console.error('Could not load store:', err);
+    }
+  }
+}
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      userId INTEGER NOT NULL,
-      projectName TEXT NOT NULL,
-      formData TEXT NOT NULL,
-      estimate TEXT,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (userId) REFERENCES users(id)
-    )
-  `);
-});
+async function saveStore() {
+  await fs.writeFile(dbPath, JSON.stringify(store, null, 2), 'utf8');
+}
+
+function getNextUserId() {
+  return store.nextUserId++;
+}
+
+function getNextProjectId() {
+  return store.nextProjectId++;
+}
+
+loadStore().then(() => console.log('Store loaded')).catch((err) => console.error(err));
 
 // Middleware to verify JWT token
 const verifyToken = (req, res, next) => {
@@ -76,23 +83,29 @@ app.post('/api/auth/signup', (req, res) => {
 
   const hashedPassword = bcryptjs.hashSync(password, 10);
 
-  db.run(
-    'INSERT INTO users (email, username, password) VALUES (?, ?, ?)',
-    [email, username, hashedPassword],
-    function(err) {
-      if (err) {
-        return res.status(400).json({ error: 'Email or username already exists' });
-      }
+  const existingUser = store.users.find((u) => u.email === email || u.username === username);
+  if (existingUser) {
+    return res.status(400).json({ error: 'Email or username already exists' });
+  }
 
-      const token = jwt.sign({ userId: this.lastID }, JWT_SECRET, { expiresIn: '7d' });
-      res.status(201).json({ 
-        message: 'Account created successfully',
-        token,
-        userId: this.lastID,
-        username
-      });
-    }
-  );
+  const user = {
+    id: getNextUserId(),
+    email,
+    username,
+    password: hashedPassword,
+    createdAt: new Date().toISOString()
+  };
+
+  store.users.push(user);
+  await saveStore();
+
+  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+  res.status(201).json({
+    message: 'Account created successfully',
+    token,
+    userId: user.id,
+    username
+  });
 });
 
 // Login
@@ -103,127 +116,122 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Email and password required' });
   }
 
-  db.get('SELECT * FROM users WHERE email = ?', [email], (err, user) => {
-    if (err || !user) {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
+  const user = store.users.find((u) => u.email === email);
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
 
-    const passwordMatch = bcryptjs.compareSync(password, user.password);
-    if (!passwordMatch) {
-      return res.status(401).json({ error: 'Invalid email or password' });
-    }
+  const passwordMatch = bcryptjs.compareSync(password, user.password);
+  if (!passwordMatch) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ 
-      message: 'Login successful',
-      token,
-      userId: user.id,
-      username: user.username
-    });
+  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({
+    message: 'Login successful',
+    token,
+    userId: user.id,
+    username: user.username
   });
 });
 
 // Get user profile
 app.get('/api/auth/profile', verifyToken, (req, res) => {
-  db.get('SELECT id, username, email FROM users WHERE id = ?', [req.userId], (err, user) => {
-    if (err || !user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json(user);
-  });
+  const user = store.users.find((u) => u.id === req.userId);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+  res.json({ id: user.id, username: user.username, email: user.email });
 });
 
 // Get all projects for user
 app.get('/api/projects', verifyToken, (req, res) => {
-  db.all(
-    'SELECT id, projectName, createdAt, updatedAt FROM projects WHERE userId = ? ORDER BY updatedAt DESC',
-    [req.userId],
-    (err, projects) => {
-      if (err) {
-        return res.status(500).json({ error: 'Error fetching projects' });
-      }
-      res.json(projects || []);
-    }
-  );
+  const projects = store.projects
+    .filter((project) => project.userId === req.userId)
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+    .map(({ id, projectName, createdAt, updatedAt }) => ({ id, projectName, createdAt, updatedAt }));
+
+  res.json(projects);
 });
 
 // Get single project
 app.get('/api/projects/:projectId', verifyToken, (req, res) => {
-  db.get(
-    'SELECT * FROM projects WHERE id = ? AND userId = ?',
-    [req.params.projectId, req.userId],
-    (err, project) => {
-      if (err || !project) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-      res.json({
-        ...project,
-        formData: JSON.parse(project.formData),
-        estimate: project.estimate ? JSON.parse(project.estimate) : null
-      });
-    }
+  const project = store.projects.find(
+    (item) => item.id === Number(req.params.projectId) && item.userId === req.userId
   );
+
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  res.json(project);
 });
 
 // Create new project
-app.post('/api/projects', verifyToken, (req, res) => {
+app.post('/api/projects', verifyToken, async (req, res) => {
   const { projectName, formData, estimate } = req.body;
 
   if (!projectName) {
     return res.status(400).json({ error: 'Project name required' });
   }
 
-  db.run(
-    'INSERT INTO projects (userId, projectName, formData, estimate) VALUES (?, ?, ?, ?)',
-    [req.userId, projectName, JSON.stringify(formData), JSON.stringify(estimate)],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Error creating project' });
-      }
-      res.status(201).json({ 
-        id: this.lastID,
-        projectName,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-    }
-  );
+  const project = {
+    id: getNextProjectId(),
+    userId: req.userId,
+    projectName,
+    formData: formData || {},
+    estimate: estimate || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  store.projects.push(project);
+  await saveStore();
+
+  res.status(201).json({
+    id: project.id,
+    projectName,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt
+  });
 });
 
 // Update project
-app.put('/api/projects/:projectId', verifyToken, (req, res) => {
+app.put('/api/projects/:projectId', verifyToken, async (req, res) => {
   const { projectName, formData, estimate } = req.body;
+  const projectId = Number(req.params.projectId);
 
-  db.run(
-    'UPDATE projects SET projectName = ?, formData = ?, estimate = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND userId = ?',
-    [projectName, JSON.stringify(formData), JSON.stringify(estimate), req.params.projectId, req.userId],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Error updating project' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-      res.json({ message: 'Project updated successfully' });
-    }
+  const project = store.projects.find(
+    (item) => item.id === projectId && item.userId === req.userId
   );
+
+  if (!project) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  project.projectName = projectName;
+  project.formData = formData || {};
+  project.estimate = estimate || null;
+  project.updatedAt = new Date().toISOString();
+
+  await saveStore();
+  res.json({ message: 'Project updated successfully' });
 });
 
 // Delete project
-app.delete('/api/projects/:projectId', verifyToken, (req, res) => {
-  db.run(
-    'DELETE FROM projects WHERE id = ? AND userId = ?',
-    [req.params.projectId, req.userId],
-    function(err) {
-      if (err) {
-        return res.status(500).json({ error: 'Error deleting project' });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-      res.json({ message: 'Project deleted successfully' });
-    }
+app.delete('/api/projects/:projectId', verifyToken, async (req, res) => {
+  const projectId = Number(req.params.projectId);
+  const index = store.projects.findIndex(
+    (item) => item.id === projectId && item.userId === req.userId
   );
+
+  if (index === -1) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  store.projects.splice(index, 1);
+  await saveStore();
+  res.json({ message: 'Project deleted successfully' });
 });
 
 app.listen(PORT, () => {
