@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jewelry Pricing Calculator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Auth Screen -->
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-container">
+      <div class="auth-logo">
+        <p class="eyebrow">Studio Tool</p>
+        <h1>Jewelry Calculator</h1>
+      </div>
+
+      <!-- Login Form -->
+      <div id="loginForm" class="auth-form active">
+        <h2>Log in to your account</h2>
+        <div class="form-group">
+          <label for="loginEmail">Email</label>
+          <input id="loginEmail" type="email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input id="loginPassword" type="password" placeholder="••••••••">
+        </div>
+        <button id="loginButton" class="btn btn-primary">Log in</button>
+        <div id="loginError" class="error-message"></div>
+        <p class="auth-switch">
+          Don't have an account? 
+          <button type="button" class="link-button" onclick="switchToSignup()">Create one</button>
+        </p>
+      </div>
+
+      <!-- Signup Form -->
+      <div id="signupForm" class="auth-form">
+        <h2>Create your account</h2>
+        <div class="form-group">
+          <label for="signupUsername">Username</label>
+          <input id="signupUsername" type="text" placeholder="your_username">
+        </div>
+        <div class="form-group">
+          <label for="signupEmail">Email</label>
+          <input id="signupEmail" type="email" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="signupPassword">Password</label>
+          <input id="signupPassword" type="password" placeholder="••••••••">
+        </div>
+        <button id="signupButton" class="btn btn-primary">Create account</button>
+        <div id="signupError" class="error-message"></div>
+        <p class="auth-switch">
+          Already have an account? 
+          <button type="button" class="link-button" onclick="switchToLogin()">Log in</button>
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main App Screen -->
+  <div id="appScreen" class="app-screen hidden">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <div class="logo">
+          <p class="eyebrow">Studio Tool</p>
+          <h1>Jewelry Pricing Calculator</h1>
+        </div>
+        <div class="user-menu">
+          <span id="currentUsername" class="username"></span>
+          <button id="logoutButton" class="btn btn-secondary">Log out</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Project selector and controls -->
+    <div class="project-controls">
+      <select id="projectSelector" class="project-select">
+        <option value="new">Create new project...</option>
+      </select>
+      <button id="newProjectButton" class="btn btn-secondary">+ New</button>
+      <button id="deleteProjectButton" class="btn btn-danger" style="display:none;">Delete</button>
+    </div>
+
+    <!-- Main Content -->
+    <main class="website">
+      <section class="intro">
+        <div>
+          <p class="eyebrow">Estimate Pricing</p>
+          <h2>Quick Jewelry Cost Calculator</h2>
+          <p class="intro-copy">Estimate production cost, wholesale price, retail price, and profit from metal, stones, labor, CAD, overhead, and markup.</p>
+        </div>
+        <div class="summary-card">
+          <span class="summary-label">Suggested Retail</span>
+          <strong id="retailPrice">$0.00</strong>
+          <small id="profitText">$0.00 estimated profit</small>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <form class="panel" id="pricingForm">
+          <div class="panel-header">
+            <h2>Inputs</h2>
+            <div class="button-group">
+              <button type="button" id="saveProjectButton" class="btn btn-success">Save Project</button>
+              <button type="button" id="resetButton" class="btn btn-secondary">Reset</button>
+            </div>
+          </div>
+
+          <div class="grid">
+            <label>
+              Piece name
+              <input id="pieceName" type="text" value="Custom ring">
+            </label>
+
+            <label>
+              Metal
+              <select id="metalType">
+                <option value="10.36" data-symbol="XAG" data-purity="0.925">Sterling silver</option>
+                <option value="13.50" data-symbol="XAU" data-purity="0.585">14K gold</option>
+                <option value="15.80" data-symbol="XAU" data-purity="0.75">18K gold</option>
+                <option value="19.30" data-symbol="XAU" data-purity="0.9167">22K gold</option>
+                <option value="21.45" data-symbol="XPT" data-purity="0.95">Platinum</option>
+              </select>
+            </label>
+
+            <label>
+              Rhino volume (mm³)
+              <input id="volume" type="number" min="0" step="0.01" value="420">
+            </label>
+
+            <label>
+              Upload CAD file (.stl or .3dm)
+              <input id="cadFile" type="file" accept=".stl,.3dm">
+            </label>
+
+            <div class="file-status" id="cadFileStatus">STL files can auto-fill volume. 3DM needs Rhino export or a Rhino.Compute backend.</div>
+
+            <label>
+              Finished weight (g)
+              <input id="weight" type="number" min="0" step="0.01" value="5.8">
+            </label>
+
+            <div class="cad-weight-control">
+              <button type="button" id="cadWeightButton">Use CAD weight estimate</button>
+              <small id="cadWeightStatus">Uses volume × selected metal density</small>
+            </div>
+
+            <label>
+              Metal price ($/g)
+              <input id="metalPrice" type="number" min="0" step="0.01" value="48">
+            </label>
+
+            <div class="live-price-control">
+              <button type="button" id="livePriceButton">Use live spot price</button>
+              <small id="livePriceStatus">Manual metal price</small>
+            </div>
+
+            <label>
+              Casting loss / buffer (%)
+              <input id="metalBuffer" type="number" min="0" step="0.1" value="8">
+            </label>
+
+            <label>
+              Stone cost
+              <input id="stoneCost" type="number" min="0" step="0.01" value="120">
+            </label>
+
+            <label>
+              Findings / chain / extra parts
+              <input id="partsCost" type="number" min="0" step="0.01" value="25">
+            </label>
+
+            <label>
+              CAD / design labor
+              <input id="cadCost" type="number" min="0" step="0.01" value="85">
+            </label>
+
+            <label>
+              Bench / production labor
+              <input id="benchCost" type="number" min="0" step="0.01" value="140">
+            </label>
+
+            <label>
+              Packaging
+              <input id="packagingCost" type="number" min="0" step="0.01" value="18">
+            </label>
+
+            <label>
+              Overhead / studio (%)
+              <input id="overheadPercent" type="number" min="0" step="0.1" value="12">
+            </label>
+
+            <label>
+              Wholesale markup (%)
+              <input id="wholesaleMarkup" type="number" min="0" step="1" value="80">
+            </label>
+
+            <label>
+              Retail markup (%)
+              <input id="retailMarkup" type="number" min="0" step="1" value="160">
+            </label>
+
+            <label>
+              Sales tax (%)
+              <input id="taxPercent" type="number" min="0" step="0.1" value="8.875">
+            </label>
+          </div>
+        </form>
+
+        <!-- Output Panel -->
+        <div class="panel output-panel">
+          <div class="panel-header">
+            <h2>Estimate</h2>
+          </div>
+          <div class="output-grid">
+            <div class="output-item">
+              <span class="output-label">Piece</span>
+              <strong id="pieceLabel">Custom ring</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">CAD weight</span>
+              <strong id="cadWeight">0.00 g</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Metal cost</span>
+              <strong id="metalCost">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Materials</span>
+              <strong id="materialsCost">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Labor</span>
+              <strong id="laborCost">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Overhead</span>
+              <strong id="overheadCost">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Production cost</span>
+              <strong id="productionCost">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Wholesale price</span>
+              <strong id="wholesalePrice">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Retail (before tax)</span>
+              <strong id="retailBeforeTax">$0.00</strong>
+            </div>
+
+            <div class="output-item">
+              <span class="output-label">Retail (with tax)</span>
+              <strong id="retailWithTax">$0.00</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Notification -->
+    <div id="notification" class="notification"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
