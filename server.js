@@ -74,7 +74,7 @@ const verifyToken = (req, res, next) => {
 // Routes
 
 // Sign up
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const { email, username, password } = req.body;
 
   if (!email || !username || !password) {
