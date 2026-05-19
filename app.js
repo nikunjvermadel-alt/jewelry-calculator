@@ -12,11 +12,19 @@ const authScreen = document.getElementById('authScreen');
 const appScreen = document.getElementById('appScreen');
 const loginForm = document.getElementById('loginForm');
 const signupForm = document.getElementById('signupForm');
+const forgotPasswordForm = document.getElementById('forgotPasswordForm');
+const resetPasswordForm = document.getElementById('resetPasswordForm');
 const loginButton = document.getElementById('loginButton');
 const signupButton = document.getElementById('signupButton');
+const forgotPasswordButton = document.getElementById('forgotPasswordButton');
+const resetPasswordButton = document.getElementById('resetPasswordButton');
 const logoutButton = document.getElementById('logoutButton');
 const loginError = document.getElementById('loginError');
 const signupError = document.getElementById('signupError');
+const forgotError = document.getElementById('forgotError');
+const forgotSuccess = document.getElementById('forgotSuccess');
+const resetError = document.getElementById('resetError');
+const resetSuccess = document.getElementById('resetSuccess');
 const currentUsername = document.getElementById('currentUsername');
 const projectSelector = document.getElementById('projectSelector');
 const newProjectButton = document.getElementById('newProjectButton');
@@ -27,19 +35,19 @@ const saveProjectButton = document.getElementById('saveProjectButton');
 const defaults = {
   pieceName: "Custom ring",
   metalType: "13.50",
-  volume: 0,
-  weight: 5.8,
-  metalPrice: 48,
-  metalBuffer: 8,
-  stoneCost: 120,
-  partsCost: 25,
-  cadCost: 85,
-  benchCost: 140,
-  packagingCost: 18,
-  overheadPercent: 12,
-  wholesaleMarkup: 80,
-  retailMarkup: 160,
-  taxPercent: 8.875
+  volume: '',
+  weight: 0,
+  metalPrice: 0,
+  metalBuffer: 0,
+  stoneCost: 0,
+  partsCost: 0,
+  cadCost: 0,
+  benchCost: 0,
+  packagingCost: 0,
+  overheadPercent: 0,
+  wholesaleMarkup: 0,
+  retailMarkup: 0,
+  taxPercent: 0
 };
 
 const moneyFormatter = new Intl.NumberFormat("en-US", {
@@ -51,6 +59,10 @@ const fields = Object.keys(defaults).reduce((items, key) => {
   items[key] = document.getElementById(key);
   return items;
 }, {});
+
+const cadFileInput = document.getElementById('cadFile');
+const cadFileStatus = document.getElementById('cadFileStatus');
+const cadWeightButton = document.getElementById('cadWeightButton');
 
 const output = {
   retailPrice: document.getElementById("retailPrice"),
@@ -69,19 +81,23 @@ const output = {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-  checkAuth();
   setupEventListeners();
+  checkAuth();
 });
 
 function setupEventListeners() {
   // Auth
   loginButton.addEventListener('click', handleLogin);
   signupButton.addEventListener('click', handleSignup);
+  forgotPasswordButton.addEventListener('click', handleForgotPassword);
+  resetPasswordButton.addEventListener('click', handleResetPassword);
   logoutButton.addEventListener('click', handleLogout);
   newProjectButton.addEventListener('click', createNewProject);
   deleteProjectButton.addEventListener('click', deleteCurrentProject);
   saveProjectButton.addEventListener('click', saveProject);
   projectSelector.addEventListener('change', loadProject);
+  cadFileInput.addEventListener('change', handleCadFileUpload);
+  cadWeightButton.addEventListener('click', useCadWeightEstimate);
 
   // Calculator
   document.getElementById('resetButton').addEventListener('click', resetForm);
@@ -91,7 +107,7 @@ function setupEventListeners() {
 
 // Auth Functions
 async function handleLogin() {
-  const email = document.getElementById('loginEmail').value;
+  const email = document.getElementById('loginEmail').value.trim().toLowerCase();
   const password = document.getElementById('loginPassword').value;
 
   if (!email || !password) {
@@ -125,8 +141,8 @@ async function handleLogin() {
 }
 
 async function handleSignup() {
-  const username = document.getElementById('signupUsername').value;
-  const email = document.getElementById('signupEmail').value;
+  const username = document.getElementById('signupUsername').value.trim();
+  const email = document.getElementById('signupEmail').value.trim().toLowerCase();
   const password = document.getElementById('signupPassword').value;
 
   if (!username || !email || !password) {
@@ -143,7 +159,10 @@ async function handleSignup() {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error);
+      const message = error.error === 'Email or username already exists'
+        ? 'Account already exists. Please log in or use Forgot password.'
+        : error.error;
+      throw new Error(message);
     }
 
     const data = await response.json();
@@ -166,6 +185,7 @@ function handleLogout() {
   currentUser = null;
   currentProjectId = null;
   projects = [];
+  currentUsername.textContent = '';
   showAuth();
   clearForm();
 }
@@ -175,11 +195,32 @@ async function checkAuth() {
   const username = localStorage.getItem('username');
 
   if (token && username) {
-    currentUser = { username };
-    showApp();
-    await loadProjects();
+    try {
+      const response = await fetch(`${API_URL}/auth/profile`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!response.ok) {
+        throw new Error('Session expired');
+      }
+
+      const user = await response.json();
+      currentUser = { id: user.id, username: user.username };
+      localStorage.setItem('userId', user.id);
+      localStorage.setItem('username', user.username);
+      showApp();
+      await loadProjects();
+    } catch (error) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('userId');
+      localStorage.removeItem('username');
+      currentUser = null;
+      showAuth();
+      checkResetQuery();
+    }
   } else {
     showAuth();
+    checkResetQuery();
   }
 }
 
@@ -187,12 +228,19 @@ async function checkAuth() {
 function showAuth() {
   authScreen.style.display = 'flex';
   appScreen.classList.add('hidden');
+  loginForm.classList.add('active');
+  signupForm.classList.remove('active');
+  forgotPasswordForm.classList.remove('active');
+  resetPasswordForm.classList.remove('active');
 }
 
 function showApp() {
   authScreen.style.display = 'none';
   appScreen.classList.remove('hidden');
   currentUsername.textContent = currentUser.username;
+  clearForm();
+  projectSelector.value = 'new';
+  deleteProjectButton.style.display = 'none';
 }
 
 function showNotification(message, type = 'success') {
@@ -375,6 +423,32 @@ function numberValue(id) {
   return Number.parseFloat(fields[id].value) || 0;
 }
 
+function handleCadFileUpload() {
+  if (cadFileInput.files.length > 0) {
+    fields.volume.disabled = false;
+    cadFileStatus.textContent = 'CAD file selected. Enter volume or use the CAD weight button if available.';
+    fields.volume.value = '';
+  } else {
+    fields.volume.disabled = true;
+    cadFileStatus.textContent = 'Upload a CAD file to enable volume input.';
+    fields.volume.value = '';
+  }
+  calculate();
+}
+
+function useCadWeightEstimate() {
+  const volume = numberValue('volume');
+  if (volume <= 0) {
+    cadFileStatus.textContent = 'Enter a valid volume from your CAD file first.';
+    return;
+  }
+
+  const estimated = cadWeightValue();
+  fields.weight.value = estimated.toFixed(2);
+  cadFileStatus.textContent = 'Finished weight estimated from CAD volume.';
+  calculate();
+}
+
 function money(value) {
   return moneyFormatter.format(value);
 }
@@ -447,25 +521,159 @@ function resetForm() {
       fields[key].value = value;
     }
   });
+
+  cadFileInput.value = '';
+  cadFileStatus.textContent = 'Upload a CAD file to enable volume input.';
+  fields.volume.value = '';
+  fields.volume.disabled = true;
+
   calculate();
 }
 
 function clearForm() {
   resetForm();
   projectSelector.value = 'new';
+  currentProjectId = null;
+  deleteProjectButton.style.display = 'none';
 }
 
 // Helper for switching auth forms
 function switchToSignup() {
   loginForm.classList.remove('active');
+  forgotPasswordForm.classList.remove('active');
+  resetPasswordForm.classList.remove('active');
   signupForm.classList.add('active');
   loginError.textContent = '';
+  forgotError.textContent = '';
+  forgotSuccess.textContent = '';
+  resetError.textContent = '';
+  resetSuccess.textContent = '';
 }
 
 function switchToLogin() {
   signupForm.classList.remove('active');
+  forgotPasswordForm.classList.remove('active');
+  resetPasswordForm.classList.remove('active');
   loginForm.classList.add('active');
   signupError.textContent = '';
+  forgotError.textContent = '';
+  forgotSuccess.textContent = '';
+  resetError.textContent = '';
+  resetSuccess.textContent = '';
+}
+
+function showForgotPassword() {
+  loginForm.classList.remove('active');
+  signupForm.classList.remove('active');
+  resetPasswordForm.classList.remove('active');
+  forgotPasswordForm.classList.add('active');
+  loginError.textContent = '';
+  signupError.textContent = '';
+  resetError.textContent = '';
+  resetSuccess.textContent = '';
+}
+
+function showResetForm() {
+  loginForm.classList.remove('active');
+  signupForm.classList.remove('active');
+  forgotPasswordForm.classList.remove('active');
+  resetPasswordForm.classList.add('active');
+  loginError.textContent = '';
+  signupError.textContent = '';
+  forgotError.textContent = '';
+  forgotSuccess.textContent = '';
+}
+
+async function handleForgotPassword() {
+  const email = document.getElementById('forgotEmail').value.trim().toLowerCase();
+  forgotError.textContent = '';
+  forgotSuccess.textContent = '';
+
+  if (!email) {
+    forgotError.textContent = 'Please enter your email';
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Unable to send reset link');
+    }
+
+    forgotSuccess.textContent = data.message || 'Reset instructions sent if the email exists.';
+    if (data.resetUrl) {
+      const lineBreak = document.createElement('br');
+      const resetLink = document.createElement('a');
+      resetLink.href = data.resetUrl;
+      resetLink.textContent = 'Open reset link';
+      forgotSuccess.appendChild(lineBreak);
+      forgotSuccess.appendChild(resetLink);
+    }
+  } catch (error) {
+    forgotError.textContent = error.message;
+  }
+}
+
+async function handleResetPassword() {
+  const token = getQueryParam('resetToken');
+  const password = document.getElementById('resetPassword').value;
+  const confirmPassword = document.getElementById('resetConfirmPassword').value;
+
+  resetError.textContent = '';
+  resetSuccess.textContent = '';
+
+  if (!token) {
+    resetError.textContent = 'Reset token is missing. Please use the link sent to your email.';
+    return;
+  }
+
+  if (!password || !confirmPassword) {
+    resetError.textContent = 'Please enter and confirm your new password.';
+    return;
+  }
+
+  if (password !== confirmPassword) {
+    resetError.textContent = 'Passwords do not match.';
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/auth/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password })
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Unable to reset password');
+    }
+
+    resetSuccess.textContent = data.message || 'Password reset successfully. You can now log in.';
+    setTimeout(() => {
+      switchToLogin();
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }, 1500);
+  } catch (error) {
+    resetError.textContent = error.message;
+  }
+}
+
+function getQueryParam(name) {
+  return new URLSearchParams(window.location.search).get(name);
+}
+
+function checkResetQuery() {
+  const token = getQueryParam('resetToken');
+  if (token) {
+    showResetForm();
+  }
 }
 
 // Initial calculation

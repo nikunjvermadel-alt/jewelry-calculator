@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,6 +19,7 @@ const dbPath = path.join(__dirname, 'data.json');
 let store = {
   users: [],
   projects: [],
+  passwordResetTokens: [],
   nextUserId: 1,
   nextProjectId: 1
 };
@@ -26,11 +29,19 @@ async function loadStore() {
     const raw = await fs.readFile(dbPath, 'utf8');
     const data = JSON.parse(raw);
     store = {
-      users: data.users || [],
+      users: (data.users || []).map((user) => ({
+        ...user,
+        email: user.email?.trim().toLowerCase() || '',
+        username: user.username?.trim() || user.username
+      })),
       projects: data.projects || [],
+      passwordResetTokens: data.passwordResetTokens || [],
       nextUserId: data.nextUserId || 1,
       nextProjectId: data.nextProjectId || 1
     };
+
+    // Save normalized email/user values back to the store immediately
+    await saveStore();
   } catch (err) {
     if (err.code === 'ENOENT') {
       await saveStore();
@@ -38,6 +49,37 @@ async function loadStore() {
       console.error('Could not load store:', err);
     }
   }
+}
+
+async function sendPasswordResetEmail(email, resetUrl) {
+  const transporterConfig = {
+    host: process.env.EMAIL_HOST,
+    port: process.env.EMAIL_PORT ? Number(process.env.EMAIL_PORT) : undefined,
+    secure: process.env.EMAIL_SECURE === 'true',
+    auth: process.env.EMAIL_USER
+      ? {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS
+        }
+      : undefined
+  };
+
+  if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    const transporter = nodemailer.createTransport(transporterConfig);
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: email,
+      subject: 'Reset your Jewelry Calculator password',
+      text: `Click the link to reset your password: ${resetUrl}`,
+      html: `<p>Click the link to reset your password:</p><p><a href="${resetUrl}">${resetUrl}</a></p>`
+    });
+  } else {
+    console.log('Password reset link:', resetUrl);
+  }
+}
+
+function hasEmailConfig() {
+  return Boolean(process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS);
 }
 
 async function saveStore() {
@@ -51,8 +93,6 @@ function getNextUserId() {
 function getNextProjectId() {
   return store.nextProjectId++;
 }
-
-loadStore().then(() => console.log('Store loaded')).catch((err) => console.error(err));
 
 // Middleware to verify JWT token
 const verifyToken = (req, res, next) => {
@@ -75,7 +115,9 @@ const verifyToken = (req, res, next) => {
 
 // Sign up
 app.post('/api/auth/signup', async (req, res) => {
-  const { email, username, password } = req.body;
+  let { email, username, password } = req.body;
+  email = email?.trim().toLowerCase();
+  username = username?.trim();
 
   if (!email || !username || !password) {
     return res.status(400).json({ error: 'Email, username, and password required' });
@@ -110,7 +152,8 @@ app.post('/api/auth/signup', async (req, res) => {
 
 // Login
 app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
+  const email = req.body.email?.trim().toLowerCase();
+  const { password } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
@@ -133,6 +176,65 @@ app.post('/api/auth/login', (req, res) => {
     userId: user.id,
     username: user.username
   });
+});
+
+// Forgot password
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const email = req.body.email?.trim().toLowerCase();
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  const user = store.users.find((u) => u.email === email);
+  if (!user) {
+    return res.status(200).json({ message: 'If this email exists, we sent a reset link.' });
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60).toISOString();
+
+  store.passwordResetTokens.push({ token, userId: user.id, expiresAt });
+  await saveStore();
+
+  const origin = req.headers.origin || process.env.FRONTEND_URL || `http://localhost:${PORT}`;
+  const resetUrl = `${origin}/?resetToken=${token}`;
+
+  try {
+    await sendPasswordResetEmail(email, resetUrl);
+  } catch (err) {
+    console.error('Email send failed:', err);
+  }
+
+  const response = { message: 'If this email exists, we sent a reset link.' };
+  if (!hasEmailConfig() && process.env.NODE_ENV !== 'production') {
+    response.resetUrl = resetUrl;
+  }
+
+  res.status(200).json(response);
+});
+
+// Reset password
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password) {
+    return res.status(400).json({ error: 'Token and new password are required' });
+  }
+
+  const resetRecord = store.passwordResetTokens.find((record) => record.token === token);
+  if (!resetRecord || new Date(resetRecord.expiresAt) < new Date()) {
+    return res.status(400).json({ error: 'Reset token is invalid or expired' });
+  }
+
+  const user = store.users.find((u) => u.id === resetRecord.userId);
+  if (!user) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  user.password = bcryptjs.hashSync(password, 10);
+  store.passwordResetTokens = store.passwordResetTokens.filter((record) => record.token !== token);
+  await saveStore();
+
+  res.json({ message: 'Password updated successfully' });
 });
 
 // Get user profile
@@ -234,6 +336,14 @@ app.delete('/api/projects/:projectId', verifyToken, async (req, res) => {
   res.json({ message: 'Project deleted successfully' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+loadStore()
+  .then(() => {
+    console.log('Store loaded');
+    app.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Could not start server:', err);
+    process.exit(1);
+  });

@@ -29,8 +29,45 @@
         <button id="loginButton" class="btn btn-primary">Log in</button>
         <div id="loginError" class="error-message"></div>
         <p class="auth-switch">
+          <button type="button" class="link-button" onclick="showForgotPassword()">Forgot password?</button>
+        </p>
+        <p class="auth-switch">
           Don't have an account? 
           <button type="button" class="link-button" onclick="switchToSignup()">Create one</button>
+        </p>
+      </div>
+
+      <!-- Forgot Password Form -->
+      <div id="forgotPasswordForm" class="auth-form">
+        <h2>Reset your password</h2>
+        <div class="form-group">
+          <label for="forgotEmail">Email</label>
+          <input id="forgotEmail" type="email" placeholder="you@example.com">
+        </div>
+        <button id="forgotPasswordButton" class="btn btn-primary">Send reset link</button>
+        <div id="forgotError" class="error-message"></div>
+        <div id="forgotSuccess" class="success-message"></div>
+        <p class="auth-switch">
+          <button type="button" class="link-button" onclick="switchToLogin()">Back to log in</button>
+        </p>
+      </div>
+
+      <!-- Reset Password Form -->
+      <div id="resetPasswordForm" class="auth-form">
+        <h2>Create a new password</h2>
+        <div class="form-group">
+          <label for="resetPassword">New password</label>
+          <input id="resetPassword" type="password" placeholder="••••••••">
+        </div>
+        <div class="form-group">
+          <label for="resetConfirmPassword">Confirm password</label>
+          <input id="resetConfirmPassword" type="password" placeholder="••••••••">
+        </div>
+        <button id="resetPasswordButton" class="btn btn-primary">Reset password</button>
+        <div id="resetError" class="error-message"></div>
+        <div id="resetSuccess" class="success-message"></div>
+        <p class="auth-switch">
+          <button type="button" class="link-button" onclick="switchToLogin()">Back to log in</button>
         </p>
       </div>
 
@@ -128,7 +165,7 @@
 
             <label>
               Rhino volume (mm³)
-              <input id="volume" type="number" min="0" step="0.01" value="420">
+              <input id="volume" type="number" min="0" step="0.01" value="" disabled>
             </label>
 
             <label>
@@ -136,11 +173,11 @@
               <input id="cadFile" type="file" accept=".stl,.3dm">
             </label>
 
-            <div class="file-status" id="cadFileStatus">STL files can auto-fill volume. 3DM needs Rhino export or a Rhino.Compute backend.</div>
+            <div class="file-status" id="cadFileStatus">Upload a CAD file to enable volume input.</div>
 
             <label>
               Finished weight (g)
-              <input id="weight" type="number" min="0" step="0.01" value="5.8">
+              <input id="weight" type="number" min="0" step="0.01" value="0">
             </label>
 
             <div class="cad-weight-control">
@@ -150,7 +187,7 @@
 
             <label>
               Metal price ($/g)
-              <input id="metalPrice" type="number" min="0" step="0.01" value="48">
+              <input id="metalPrice" type="number" min="0" step="0.01" value="0">
             </label>
 
             <div class="live-price-control">
@@ -160,52 +197,52 @@
 
             <label>
               Casting loss / buffer (%)
-              <input id="metalBuffer" type="number" min="0" step="0.1" value="8">
+              <input id="metalBuffer" type="number" min="0" step="0.1" value="0">
             </label>
 
             <label>
               Stone cost
-              <input id="stoneCost" type="number" min="0" step="0.01" value="120">
+              <input id="stoneCost" type="number" min="0" step="0.01" value="0">
             </label>
 
             <label>
               Findings / chain / extra parts
-              <input id="partsCost" type="number" min="0" step="0.01" value="25">
+              <input id="partsCost" type="number" min="0" step="0.01" value="0">
             </label>
 
             <label>
               CAD / design labor
-              <input id="cadCost" type="number" min="0" step="0.01" value="85">
+              <input id="cadCost" type="number" min="0" step="0.01" value="0">
             </label>
 
             <label>
               Bench / production labor
-              <input id="benchCost" type="number" min="0" step="0.01" value="140">
+              <input id="benchCost" type="number" min="0" step="0.01" value="0">
             </label>
 
             <label>
               Packaging
-              <input id="packagingCost" type="number" min="0" step="0.01" value="18">
+              <input id="packagingCost" type="number" min="0" step="0.01" value="0">
             </label>
 
             <label>
               Overhead / studio (%)
-              <input id="overheadPercent" type="number" min="0" step="0.1" value="12">
+              <input id="overheadPercent" type="number" min="0" step="0.1" value="0">
             </label>
 
             <label>
               Wholesale markup (%)
-              <input id="wholesaleMarkup" type="number" min="0" step="1" value="80">
+              <input id="wholesaleMarkup" type="number" min="0" step="1" value="0">
             </label>
 
             <label>
               Retail markup (%)
-              <input id="retailMarkup" type="number" min="0" step="1" value="160">
+              <input id="retailMarkup" type="number" min="0" step="1" value="0">
             </label>
 
             <label>
               Sales tax (%)
-              <input id="taxPercent" type="number" min="0" step="0.1" value="8.875">
+              <input id="taxPercent" type="number" min="0" step="0.1" value="0">
             </label>
           </div>
         </form>
