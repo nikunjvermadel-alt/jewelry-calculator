@@ -63,6 +63,10 @@ const fields = Object.keys(defaults).reduce((items, key) => {
 const cadFileInput = document.getElementById('cadFile');
 const cadFileStatus = document.getElementById('cadFileStatus');
 const cadWeightButton = document.getElementById('cadWeightButton');
+const livePriceButton = document.getElementById('livePriceButton');
+const livePriceStatus = document.getElementById('livePriceStatus');
+const TROY_OUNCE_GRAMS = 31.1034768;
+const livePriceCache = {};
 let rhino3dmModulePromise = null;
 
 const output = {
@@ -99,6 +103,7 @@ function setupEventListeners() {
   projectSelector.addEventListener('change', loadProject);
   cadFileInput.addEventListener('change', handleCadFileUpload);
   cadWeightButton.addEventListener('click', useCadWeightEstimate);
+  livePriceButton.addEventListener('click', () => updateLiveMetalPrice(true));
 
   // Calculator
   document.getElementById('resetButton').addEventListener('click', resetForm);
@@ -668,6 +673,46 @@ function useCadWeightEstimate() {
 
 function money(value) {
   return moneyFormatter.format(value);
+}
+
+async function fetchSpotPrice(symbol, forceRefresh = false) {
+  if (!forceRefresh && livePriceCache[symbol]) {
+    return livePriceCache[symbol];
+  }
+
+  const response = await fetch(`${API_URL}/metal-price/${symbol}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Metal price API request failed');
+  }
+
+  if (!Number.isFinite(data.price)) {
+    throw new Error('Metal price API returned an invalid price');
+  }
+
+  livePriceCache[symbol] = data;
+  return data;
+}
+
+async function updateLiveMetalPrice(forceRefresh = false) {
+  const metal = selectedMetal();
+
+  livePriceButton.disabled = true;
+  livePriceStatus.textContent = `Loading ${metal.name} spot price...`;
+
+  try {
+    const spot = await fetchSpotPrice(metal.symbol, forceRefresh);
+    const pricePerGram = spot.price / TROY_OUNCE_GRAMS * metal.purity;
+
+    fields.metalPrice.value = pricePerGram.toFixed(2);
+    livePriceStatus.textContent = `${metal.name}: ${money(pricePerGram)}/g from ${money(spot.price)}/oz spot`;
+    calculate();
+  } catch (error) {
+    livePriceStatus.textContent = 'Live price unavailable. Manual price is still active.';
+  } finally {
+    livePriceButton.disabled = false;
+  }
 }
 
 function selectedMetal() {
