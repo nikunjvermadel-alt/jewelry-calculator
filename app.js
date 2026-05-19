@@ -423,17 +423,113 @@ function numberValue(id) {
   return Number.parseFloat(fields[id].value) || 0;
 }
 
-function handleCadFileUpload() {
-  if (cadFileInput.files.length > 0) {
-    fields.volume.disabled = false;
-    cadFileStatus.textContent = 'CAD file selected. Enter volume or use the CAD weight button if available.';
-    fields.volume.value = '';
-  } else {
+async function handleCadFileUpload() {
+  const file = cadFileInput.files[0];
+
+  if (!file) {
     fields.volume.disabled = true;
-    cadFileStatus.textContent = 'Upload a CAD file to enable volume input.';
+    cadFileStatus.textContent = 'Upload an STL file to auto-fill volume, or enter Rhino volume manually.';
     fields.volume.value = '';
+    calculate();
+    return;
   }
-  calculate();
+
+  fields.volume.disabled = false;
+  fields.volume.value = '';
+  cadFileStatus.textContent = 'Scanning STL volume...';
+
+  const fileName = file.name.toLowerCase();
+  if (!fileName.endsWith('.stl')) {
+    cadFileStatus.textContent = '3DM files cannot be scanned in the browser yet. Export from Rhino as STL, or enter Rhino volume manually.';
+    calculate();
+    return;
+  }
+
+  try {
+    const volume = await readStlVolume(file);
+    if (!Number.isFinite(volume) || volume <= 0) {
+      throw new Error('No closed mesh volume found');
+    }
+
+    fields.volume.value = volume.toFixed(2);
+    cadFileStatus.textContent = `Volume scanned from STL: ${volume.toFixed(2)} mm³`;
+    calculate();
+  } catch (error) {
+    cadFileStatus.textContent = `Could not scan STL volume. Enter Rhino volume manually. ${error.message}`;
+    calculate();
+  }
+}
+
+async function readStlVolume(file) {
+  const buffer = await file.arrayBuffer();
+  return isBinaryStl(buffer) ? binaryStlVolume(buffer) : asciiStlVolume(await file.text());
+}
+
+function isBinaryStl(buffer) {
+  if (buffer.byteLength < 84) return false;
+
+  const view = new DataView(buffer);
+  const triangleCount = view.getUint32(80, true);
+  return 84 + triangleCount * 50 === buffer.byteLength;
+}
+
+function binaryStlVolume(buffer) {
+  const view = new DataView(buffer);
+  const triangleCount = view.getUint32(80, true);
+  let offset = 84;
+  let signedVolume = 0;
+
+  for (let index = 0; index < triangleCount; index += 1) {
+    offset += 12;
+    const a = readStlVertex(view, offset);
+    const b = readStlVertex(view, offset + 12);
+    const c = readStlVertex(view, offset + 24);
+    signedVolume += tetrahedronVolume(a, b, c);
+    offset += 38;
+  }
+
+  return Math.abs(signedVolume);
+}
+
+function readStlVertex(view, offset) {
+  return {
+    x: view.getFloat32(offset, true),
+    y: view.getFloat32(offset + 4, true),
+    z: view.getFloat32(offset + 8, true)
+  };
+}
+
+function asciiStlVolume(text) {
+  const vertexPattern = /vertex\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s+([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)/gi;
+  const vertices = [];
+  let match;
+
+  while ((match = vertexPattern.exec(text)) !== null) {
+    vertices.push({
+      x: Number.parseFloat(match[1]),
+      y: Number.parseFloat(match[2]),
+      z: Number.parseFloat(match[3])
+    });
+  }
+
+  if (vertices.length < 3 || vertices.length % 3 !== 0) {
+    throw new Error('Invalid ASCII STL mesh');
+  }
+
+  let signedVolume = 0;
+  for (let index = 0; index < vertices.length; index += 3) {
+    signedVolume += tetrahedronVolume(vertices[index], vertices[index + 1], vertices[index + 2]);
+  }
+
+  return Math.abs(signedVolume);
+}
+
+function tetrahedronVolume(a, b, c) {
+  return (
+    a.x * (b.y * c.z - b.z * c.y) -
+    a.y * (b.x * c.z - b.z * c.x) +
+    a.z * (b.x * c.y - b.y * c.x)
+  ) / 6;
 }
 
 function useCadWeightEstimate() {
@@ -523,7 +619,7 @@ function resetForm() {
   });
 
   cadFileInput.value = '';
-  cadFileStatus.textContent = 'Upload a CAD file to enable volume input.';
+  cadFileStatus.textContent = 'Upload an STL file to auto-fill volume, or enter Rhino volume manually.';
   fields.volume.value = '';
   fields.volume.disabled = true;
 
