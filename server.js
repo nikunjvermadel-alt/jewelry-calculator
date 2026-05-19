@@ -69,9 +69,14 @@ async function initializeDatabase() {
       email TEXT NOT NULL UNIQUE,
       username TEXT NOT NULL UNIQUE,
       password TEXT NOT NULL,
+      login_count INTEGER NOT NULL DEFAULT 0,
+      last_login_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count INTEGER NOT NULL DEFAULT 0');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ');
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS projects (
@@ -125,6 +130,63 @@ function hasEmailConfig() {
   return Boolean(process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS);
 }
 
+function createEmailTransporter() {
+  return nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: process.env.EMAIL_PORT ? Number(process.env.EMAIL_PORT) : undefined,
+    secure: process.env.EMAIL_SECURE === 'true',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS
+    }
+  });
+}
+
+function csvValue(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function buildLoginReportCsv(users) {
+  const header = [
+    'user_id',
+    'username',
+    'email',
+    'created_at',
+    'login_count',
+    'last_login_at',
+    'password_status'
+  ];
+
+  const rows = users.map((user) => [
+    user.id,
+    user.username,
+    user.email,
+    user.createdAt,
+    user.loginCount || 0,
+    user.lastLoginAt || '',
+    'Not exported. Passwords are securely hashed and cannot be viewed.'
+  ]);
+
+  return [header, ...rows].map((row) => row.map(csvValue).join(',')).join('\n');
+}
+
+function verifyAdminToken(req, res) {
+  const adminToken = process.env.ADMIN_TOKEN;
+  if (!adminToken) {
+    res.status(503).json({ error: 'Admin reports are disabled. Set ADMIN_TOKEN first.' });
+    return false;
+  }
+
+  const suppliedToken = req.headers['x-admin-token'] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  if (suppliedToken !== adminToken) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+
+  return true;
+}
+
 async function saveStore() {
   await fs.writeFile(dbPath, JSON.stringify(store, null, 2), 'utf8');
 }
@@ -144,6 +206,8 @@ function normalizeUser(row) {
     email: row.email,
     username: row.username,
     password: row.password,
+    loginCount: row.login_count ?? row.loginCount ?? 0,
+    lastLoginAt: row.last_login_at instanceof Date ? row.last_login_at.toISOString() : row.lastLoginAt || row.last_login_at || null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.createdAt || row.created_at
   };
 }
@@ -202,12 +266,51 @@ async function createUser({ email, username, password }) {
     email,
     username,
     password,
+    loginCount: 0,
+    lastLoginAt: null,
     createdAt: new Date().toISOString()
   };
 
   store.users.push(user);
   await saveStore();
   return user;
+}
+
+async function recordSuccessfulLogin(userId) {
+  if (pool) {
+    await pool.query(
+      'UPDATE users SET login_count = login_count + 1, last_login_at = NOW() WHERE id = $1',
+      [userId]
+    );
+    return;
+  }
+
+  const user = store.users.find((u) => u.id === userId);
+  if (user) {
+    user.loginCount = (user.loginCount || 0) + 1;
+    user.lastLoginAt = new Date().toISOString();
+    await saveStore();
+  }
+}
+
+async function listUsersForReport() {
+  if (pool) {
+    const result = await pool.query(
+      `SELECT id, username, email, login_count, last_login_at, created_at
+       FROM users
+       ORDER BY created_at DESC`
+    );
+    return result.rows.map(normalizeUser);
+  }
+
+  return store.users
+    .slice()
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .map((user) => ({
+      ...user,
+      loginCount: user.loginCount || 0,
+      lastLoginAt: user.lastLoginAt || null
+    }));
 }
 
 async function updateUserPassword(userId, hashedPassword) {
@@ -400,6 +503,51 @@ app.get('/api/metal-price/:symbol', async (req, res) => {
   }
 });
 
+app.get('/api/admin/login-report', async (req, res) => {
+  if (!verifyAdminToken(req, res)) return;
+
+  const users = await listUsersForReport();
+  const csv = buildLoginReportCsv(users);
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="jewelry-login-report.csv"');
+  res.send(csv);
+});
+
+app.post('/api/admin/login-report/email', async (req, res) => {
+  if (!verifyAdminToken(req, res)) return;
+
+  if (!hasEmailConfig()) {
+    return res.status(503).json({ error: 'Email is not configured. Set EMAIL_HOST, EMAIL_USER, and EMAIL_PASS.' });
+  }
+
+  const users = await listUsersForReport();
+  const csv = buildLoginReportCsv(users);
+  const recipient = process.env.ADMIN_REPORT_EMAIL || 'nikunj.verma@live.com';
+
+  try {
+    const transporter = createEmailTransporter();
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: recipient,
+      subject: 'Jewelry Calculator Login Report',
+      text: 'Attached is the latest login report. Plaintext passwords are not included because passwords are securely hashed.',
+      attachments: [
+        {
+          filename: 'jewelry-login-report.csv',
+          content: csv,
+          contentType: 'text/csv'
+        }
+      ]
+    });
+
+    res.json({ message: `Login report emailed to ${recipient}.`, userCount: users.length });
+  } catch (err) {
+    console.error('Login report email failed:', err);
+    res.status(500).json({ error: 'Unable to email login report' });
+  }
+});
+
 // Sign up
 app.post('/api/auth/signup', async (req, res) => {
   let { email, username, password } = req.body;
@@ -454,6 +602,8 @@ app.post('/api/auth/login', async (req, res) => {
   if (!passwordMatch) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
+
+  await recordSuccessfulLogin(user.id);
 
   const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
   res.json({

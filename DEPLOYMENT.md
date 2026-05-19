@@ -143,6 +143,8 @@ DATABASE_URL=your-render-postgres-internal-database-url
 DATABASE_SSL=true
 JWT_SECRET=your-very-secure-random-key-here
 NODE_ENV=production
+ADMIN_TOKEN=your-private-admin-report-token
+ADMIN_REPORT_EMAIL=nikunj.verma@live.com
 ```
 6. Deploy
 
@@ -187,6 +189,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 - `POST /api/projects` - Create new project
 - `PUT /api/projects/:projectId` - Update project
 - `DELETE /api/projects/:projectId` - Delete project
+
+### Admin Reports
+- `GET /api/admin/login-report` - Download a CSV login report. Requires `x-admin-token` or `Authorization: Bearer`.
+- `POST /api/admin/login-report/email` - Email the CSV login report to `ADMIN_REPORT_EMAIL`. Requires email settings and `ADMIN_TOKEN`.
+
+The report never includes plaintext passwords. Passwords are securely hashed and cannot be viewed.
 
 ## Troubleshooting
 
