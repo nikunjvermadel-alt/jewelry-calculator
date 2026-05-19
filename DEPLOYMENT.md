@@ -135,9 +135,18 @@ heroku open
 #### Render
 1. Push to GitHub
 2. Connect GitHub repo to Render
-3. Create new Web Service
-4. Set environment variables
-5. Deploy
+3. Create a Render Postgres database
+4. Create a new Web Service
+5. Set environment variables:
+```env
+DATABASE_URL=your-render-postgres-internal-database-url
+DATABASE_SSL=true
+JWT_SECRET=your-very-secure-random-key-here
+NODE_ENV=production
+```
+6. Deploy
+
+Without `DATABASE_URL`, Render uses an ephemeral filesystem and account/project data can disappear after restarts or deploys.
 
 #### DigitalOcean / AWS / Azure
 Follow platform-specific deployment guides, ensuring:
@@ -157,7 +166,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 2. **Use HTTPS**: Always use HTTPS in production
 
-3. **Database**: SQLite is suitable for small to medium deployments. For larger scale, consider PostgreSQL
+3. **Database**: Use Postgres in production. JSON file storage is only a local-development fallback.
 
 4. **CORS**: Configure allowed origins in `server.js`
 
@@ -187,7 +196,7 @@ npm install
 ```
 
 ### Database errors
-Delete `jewelry.db` and restart the server to recreate the database
+For local JSON storage, delete `data.json` and restart the server to recreate the store. For production, confirm `DATABASE_URL` is set to your Render Postgres internal database URL.
 
 ### CORS errors
 Check that the frontend API_URL matches your server URL

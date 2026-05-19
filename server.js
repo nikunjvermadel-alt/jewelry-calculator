@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,6 +17,7 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 const dbPath = path.join(__dirname, 'data.json');
+let pool = null;
 let store = {
   users: [],
   projects: [],
@@ -25,6 +27,15 @@ let store = {
 };
 
 async function loadStore() {
+  if (process.env.DATABASE_URL) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
+    });
+    await initializeDatabase();
+    return;
+  }
+
   try {
     const raw = await fs.readFile(dbPath, 'utf8');
     const data = JSON.parse(raw);
@@ -49,6 +60,38 @@ async function loadStore() {
       console.error('Could not load store:', err);
     }
   }
+}
+
+async function initializeDatabase() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      project_name TEXT NOT NULL,
+      form_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      estimate JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      token TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL
+    )
+  `);
 }
 
 async function sendPasswordResetEmail(email, resetUrl) {
@@ -92,6 +135,221 @@ function getNextUserId() {
 
 function getNextProjectId() {
   return store.nextProjectId++;
+}
+
+function normalizeUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    username: row.username,
+    password: row.password,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.createdAt || row.created_at
+  };
+}
+
+function normalizeProject(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    projectName: row.project_name,
+    formData: row.form_data,
+    estimate: row.estimate,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.createdAt || row.created_at,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updatedAt || row.updated_at
+  };
+}
+
+async function findUserByEmail(email) {
+  if (pool) {
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    return normalizeUser(result.rows[0]);
+  }
+
+  return store.users.find((u) => u.email === email) || null;
+}
+
+async function findUserById(id) {
+  if (pool) {
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    return normalizeUser(result.rows[0]);
+  }
+
+  return store.users.find((u) => u.id === id) || null;
+}
+
+async function findUserByEmailOrUsername(email, username) {
+  if (pool) {
+    const result = await pool.query('SELECT * FROM users WHERE email = $1 OR username = $2', [email, username]);
+    return normalizeUser(result.rows[0]);
+  }
+
+  return store.users.find((u) => u.email === email || u.username === username) || null;
+}
+
+async function createUser({ email, username, password }) {
+  if (pool) {
+    const result = await pool.query(
+      'INSERT INTO users (email, username, password) VALUES ($1, $2, $3) RETURNING *',
+      [email, username, password]
+    );
+    return normalizeUser(result.rows[0]);
+  }
+
+  const user = {
+    id: getNextUserId(),
+    email,
+    username,
+    password,
+    createdAt: new Date().toISOString()
+  };
+
+  store.users.push(user);
+  await saveStore();
+  return user;
+}
+
+async function updateUserPassword(userId, hashedPassword) {
+  if (pool) {
+    await pool.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+    return;
+  }
+
+  const user = store.users.find((u) => u.id === userId);
+  if (user) {
+    user.password = hashedPassword;
+    await saveStore();
+  }
+}
+
+async function createPasswordResetToken(token, userId, expiresAt) {
+  if (pool) {
+    await pool.query(
+      'INSERT INTO password_reset_tokens (token, user_id, expires_at) VALUES ($1, $2, $3)',
+      [token, userId, expiresAt]
+    );
+    return;
+  }
+
+  store.passwordResetTokens.push({ token, userId, expiresAt });
+  await saveStore();
+}
+
+async function findPasswordResetToken(token) {
+  if (pool) {
+    const result = await pool.query('SELECT token, user_id, expires_at FROM password_reset_tokens WHERE token = $1', [token]);
+    const row = result.rows[0];
+    return row
+      ? {
+          token: row.token,
+          userId: row.user_id,
+          expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at
+        }
+      : null;
+  }
+
+  return store.passwordResetTokens.find((record) => record.token === token) || null;
+}
+
+async function deletePasswordResetToken(token) {
+  if (pool) {
+    await pool.query('DELETE FROM password_reset_tokens WHERE token = $1', [token]);
+    return;
+  }
+
+  store.passwordResetTokens = store.passwordResetTokens.filter((record) => record.token !== token);
+  await saveStore();
+}
+
+async function listUserProjects(userId) {
+  if (pool) {
+    const result = await pool.query(
+      `SELECT id, project_name, created_at, updated_at
+       FROM projects
+       WHERE user_id = $1
+       ORDER BY updated_at DESC`,
+      [userId]
+    );
+    return result.rows.map(normalizeProject);
+  }
+
+  return store.projects
+    .filter((project) => project.userId === userId)
+    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+}
+
+async function findUserProject(userId, projectId) {
+  if (pool) {
+    const result = await pool.query('SELECT * FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]);
+    return normalizeProject(result.rows[0]);
+  }
+
+  return store.projects.find((item) => item.id === projectId && item.userId === userId) || null;
+}
+
+async function createUserProject(userId, { projectName, formData, estimate }) {
+  if (pool) {
+    const result = await pool.query(
+      `INSERT INTO projects (user_id, project_name, form_data, estimate)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [userId, projectName, formData || {}, estimate || null]
+    );
+    return normalizeProject(result.rows[0]);
+  }
+
+  const project = {
+    id: getNextProjectId(),
+    userId,
+    projectName,
+    formData: formData || {},
+    estimate: estimate || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  store.projects.push(project);
+  await saveStore();
+  return project;
+}
+
+async function updateUserProject(userId, projectId, { projectName, formData, estimate }) {
+  if (pool) {
+    const result = await pool.query(
+      `UPDATE projects
+       SET project_name = $1, form_data = $2, estimate = $3, updated_at = NOW()
+       WHERE id = $4 AND user_id = $5
+       RETURNING *`,
+      [projectName, formData || {}, estimate || null, projectId, userId]
+    );
+    return normalizeProject(result.rows[0]);
+  }
+
+  const project = store.projects.find((item) => item.id === projectId && item.userId === userId);
+  if (!project) return null;
+
+  project.projectName = projectName;
+  project.formData = formData || {};
+  project.estimate = estimate || null;
+  project.updatedAt = new Date().toISOString();
+
+  await saveStore();
+  return project;
+}
+
+async function deleteUserProject(userId, projectId) {
+  if (pool) {
+    const result = await pool.query('DELETE FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]);
+    return result.rowCount > 0;
+  }
+
+  const index = store.projects.findIndex((item) => item.id === projectId && item.userId === userId);
+  if (index === -1) return false;
+
+  store.projects.splice(index, 1);
+  await saveStore();
+  return true;
 }
 
 // Middleware to verify JWT token
@@ -152,35 +410,34 @@ app.post('/api/auth/signup', async (req, res) => {
     return res.status(400).json({ error: 'Email, username, and password required' });
   }
 
-  const hashedPassword = bcryptjs.hashSync(password, 10);
+  try {
+    const existingUser = await findUserByEmailOrUsername(email, username);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Email or username already exists' });
+    }
 
-  const existingUser = store.users.find((u) => u.email === email || u.username === username);
-  if (existingUser) {
-    return res.status(400).json({ error: 'Email or username already exists' });
+    const hashedPassword = bcryptjs.hashSync(password, 10);
+    const user = await createUser({ email, username, password: hashedPassword });
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({
+      message: 'Account created successfully',
+      token,
+      userId: user.id,
+      username: user.username
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Email or username already exists' });
+    }
+
+    console.error('Signup failed:', err);
+    res.status(500).json({ error: 'Unable to create account' });
   }
-
-  const user = {
-    id: getNextUserId(),
-    email,
-    username,
-    password: hashedPassword,
-    createdAt: new Date().toISOString()
-  };
-
-  store.users.push(user);
-  await saveStore();
-
-  const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-  res.status(201).json({
-    message: 'Account created successfully',
-    token,
-    userId: user.id,
-    username
-  });
 });
 
 // Login
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const email = req.body.email?.trim().toLowerCase();
   const { password } = req.body;
 
@@ -188,7 +445,7 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Email and password required' });
   }
 
-  const user = store.users.find((u) => u.email === email);
+  const user = await findUserByEmail(email);
   if (!user) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
@@ -214,7 +471,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     return res.status(400).json({ error: 'Email is required' });
   }
 
-  const user = store.users.find((u) => u.email === email);
+  const user = await findUserByEmail(email);
   if (!user) {
     return res.status(200).json({ message: 'If this email exists, we sent a reset link.' });
   }
@@ -222,8 +479,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60).toISOString();
 
-  store.passwordResetTokens.push({ token, userId: user.id, expiresAt });
-  await saveStore();
+  await createPasswordResetToken(token, user.id, expiresAt);
 
   const origin = req.headers.origin || process.env.FRONTEND_URL || `http://localhost:${PORT}`;
   const resetUrl = `${origin}/?resetToken=${token}`;
@@ -249,26 +505,25 @@ app.post('/api/auth/reset-password', async (req, res) => {
     return res.status(400).json({ error: 'Token and new password are required' });
   }
 
-  const resetRecord = store.passwordResetTokens.find((record) => record.token === token);
+  const resetRecord = await findPasswordResetToken(token);
   if (!resetRecord || new Date(resetRecord.expiresAt) < new Date()) {
     return res.status(400).json({ error: 'Reset token is invalid or expired' });
   }
 
-  const user = store.users.find((u) => u.id === resetRecord.userId);
+  const user = await findUserById(resetRecord.userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  user.password = bcryptjs.hashSync(password, 10);
-  store.passwordResetTokens = store.passwordResetTokens.filter((record) => record.token !== token);
-  await saveStore();
+  await updateUserPassword(user.id, bcryptjs.hashSync(password, 10));
+  await deletePasswordResetToken(token);
 
   res.json({ message: 'Password updated successfully' });
 });
 
 // Get user profile
-app.get('/api/auth/profile', verifyToken, (req, res) => {
-  const user = store.users.find((u) => u.id === req.userId);
+app.get('/api/auth/profile', verifyToken, async (req, res) => {
+  const user = await findUserById(req.userId);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
@@ -276,20 +531,16 @@ app.get('/api/auth/profile', verifyToken, (req, res) => {
 });
 
 // Get all projects for user
-app.get('/api/projects', verifyToken, (req, res) => {
-  const projects = store.projects
-    .filter((project) => project.userId === req.userId)
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+app.get('/api/projects', verifyToken, async (req, res) => {
+  const projects = (await listUserProjects(req.userId))
     .map(({ id, projectName, createdAt, updatedAt }) => ({ id, projectName, createdAt, updatedAt }));
 
   res.json(projects);
 });
 
 // Get single project
-app.get('/api/projects/:projectId', verifyToken, (req, res) => {
-  const project = store.projects.find(
-    (item) => item.id === Number(req.params.projectId) && item.userId === req.userId
-  );
+app.get('/api/projects/:projectId', verifyToken, async (req, res) => {
+  const project = await findUserProject(req.userId, Number(req.params.projectId));
 
   if (!project) {
     return res.status(404).json({ error: 'Project not found' });
@@ -306,18 +557,7 @@ app.post('/api/projects', verifyToken, async (req, res) => {
     return res.status(400).json({ error: 'Project name required' });
   }
 
-  const project = {
-    id: getNextProjectId(),
-    userId: req.userId,
-    projectName,
-    formData: formData || {},
-    estimate: estimate || null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-
-  store.projects.push(project);
-  await saveStore();
+  const project = await createUserProject(req.userId, { projectName, formData, estimate });
 
   res.status(201).json({
     id: project.id,
@@ -332,36 +572,24 @@ app.put('/api/projects/:projectId', verifyToken, async (req, res) => {
   const { projectName, formData, estimate } = req.body;
   const projectId = Number(req.params.projectId);
 
-  const project = store.projects.find(
-    (item) => item.id === projectId && item.userId === req.userId
-  );
+  const project = await updateUserProject(req.userId, projectId, { projectName, formData, estimate });
 
   if (!project) {
     return res.status(404).json({ error: 'Project not found' });
   }
 
-  project.projectName = projectName;
-  project.formData = formData || {};
-  project.estimate = estimate || null;
-  project.updatedAt = new Date().toISOString();
-
-  await saveStore();
   res.json({ message: 'Project updated successfully' });
 });
 
 // Delete project
 app.delete('/api/projects/:projectId', verifyToken, async (req, res) => {
   const projectId = Number(req.params.projectId);
-  const index = store.projects.findIndex(
-    (item) => item.id === projectId && item.userId === req.userId
-  );
+  const deleted = await deleteUserProject(req.userId, projectId);
 
-  if (index === -1) {
+  if (!deleted) {
     return res.status(404).json({ error: 'Project not found' });
   }
 
-  store.projects.splice(index, 1);
-  await saveStore();
   res.json({ message: 'Project deleted successfully' });
 });
 
