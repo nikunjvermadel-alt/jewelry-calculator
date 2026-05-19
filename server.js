@@ -467,35 +467,23 @@ app.post('/api/auth/login', async (req, res) => {
 // Forgot password
 app.post('/api/auth/forgot-password', async (req, res) => {
   const email = req.body.email?.trim().toLowerCase();
+  const { password } = req.body;
+
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
   }
 
+  if (!password) {
+    return res.status(400).json({ error: 'New password is required' });
+  }
+
   const user = await findUserByEmail(email);
   if (!user) {
-    return res.status(200).json({ message: 'If this email exists, we sent a reset link.' });
+    return res.status(404).json({ error: 'No account found with that email.' });
   }
 
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60).toISOString();
-
-  await createPasswordResetToken(token, user.id, expiresAt);
-
-  const origin = req.headers.origin || process.env.FRONTEND_URL || `http://localhost:${PORT}`;
-  const resetUrl = `${origin}/?resetToken=${token}`;
-
-  try {
-    await sendPasswordResetEmail(email, resetUrl);
-  } catch (err) {
-    console.error('Email send failed:', err);
-  }
-
-  const response = { message: 'If this email exists, we sent a reset link.' };
-  if (!hasEmailConfig() && process.env.NODE_ENV !== 'production') {
-    response.resetUrl = resetUrl;
-  }
-
-  res.status(200).json(response);
+  await updateUserPassword(user.id, bcryptjs.hashSync(password, 10));
+  res.status(200).json({ message: 'Password updated. You can now log in.' });
 });
 
 // Reset password

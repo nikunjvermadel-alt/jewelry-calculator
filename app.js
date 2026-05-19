@@ -848,6 +848,8 @@ function showResetForm() {
 
 async function handleForgotPassword() {
   const email = document.getElementById('forgotEmail').value.trim().toLowerCase();
+  const password = document.getElementById('forgotPassword').value;
+  const confirmPassword = document.getElementById('forgotConfirmPassword').value;
   forgotError.textContent = '';
   forgotSuccess.textContent = '';
 
@@ -856,27 +858,31 @@ async function handleForgotPassword() {
     return;
   }
 
+  if (!password || !confirmPassword) {
+    forgotError.textContent = 'Please enter and confirm your new password.';
+    return;
+  }
+
+  if (password !== confirmPassword) {
+    forgotError.textContent = 'Passwords do not match.';
+    return;
+  }
+
   try {
     const response = await fetch(`${API_URL}/auth/forgot-password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email })
+      body: JSON.stringify({ email, password })
     });
 
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error || 'Unable to send reset link');
+      throw new Error(data.error || 'Unable to update password');
     }
 
-    forgotSuccess.textContent = data.message || 'Reset instructions sent if the email exists.';
-    if (data.resetUrl) {
-      const lineBreak = document.createElement('br');
-      const resetLink = document.createElement('a');
-      resetLink.href = data.resetUrl;
-      resetLink.textContent = 'Open reset link';
-      forgotSuccess.appendChild(lineBreak);
-      forgotSuccess.appendChild(resetLink);
-    }
+    forgotSuccess.textContent = data.message || 'Password updated. You can now log in.';
+    document.getElementById('forgotPassword').value = '';
+    document.getElementById('forgotConfirmPassword').value = '';
   } catch (error) {
     forgotError.textContent = error.message;
   }
