@@ -63,6 +63,7 @@ const fields = Object.keys(defaults).reduce((items, key) => {
 const cadFileInput = document.getElementById('cadFile');
 const cadFileStatus = document.getElementById('cadFileStatus');
 const cadWeightButton = document.getElementById('cadWeightButton');
+let rhino3dmModulePromise = null;
 
 const output = {
   retailPrice: document.getElementById("retailPrice"),
@@ -428,7 +429,7 @@ async function handleCadFileUpload() {
 
   if (!file) {
     fields.volume.disabled = true;
-    cadFileStatus.textContent = 'Upload an STL file to auto-fill volume, or enter Rhino volume manually.';
+    cadFileStatus.textContent = 'Upload an STL or mesh-based 3DM file to auto-fill volume, or enter Rhino volume manually.';
     fields.volume.value = '';
     calculate();
     return;
@@ -436,46 +437,65 @@ async function handleCadFileUpload() {
 
   fields.volume.disabled = false;
   fields.volume.value = '';
-  cadFileStatus.textContent = 'Scanning STL volume...';
+  cadFileStatus.textContent = 'Scanning CAD file volume...';
 
   const fileName = file.name.toLowerCase();
-  if (!fileName.endsWith('.stl')) {
-    cadFileStatus.textContent = '3DM files cannot be scanned in the browser yet. Export from Rhino as STL, or enter Rhino volume manually.';
+  if (!fileName.endsWith('.stl') && !fileName.endsWith('.3dm')) {
+    cadFileStatus.textContent = 'Use an STL or 3DM file, or enter Rhino volume manually.';
     calculate();
     return;
   }
 
   try {
-    const volume = await readStlVolume(file);
+    const volume = fileName.endsWith('.stl')
+      ? await readStlVolume(file)
+      : await read3dmVolume(file);
+
     if (!Number.isFinite(volume) || volume <= 0) {
       throw new Error('No closed mesh volume found');
     }
 
     fields.volume.value = volume.toFixed(2);
-    cadFileStatus.textContent = `Volume scanned from STL: ${volume.toFixed(2)} mm³`;
+    cadFileStatus.textContent = `Volume scanned from ${fileName.endsWith('.stl') ? 'STL' : '3DM'}: ${volume.toFixed(2)} mm³`;
     calculate();
   } catch (error) {
-    cadFileStatus.textContent = `Could not scan STL volume. Enter Rhino volume manually. ${error.message}`;
+    cadFileStatus.textContent = `Could not scan file volume. Enter Rhino volume manually. ${error.message}`;
     calculate();
   }
 }
 
 async function readStlVolume(file) {
   const buffer = await file.arrayBuffer();
-  return isBinaryStl(buffer) ? binaryStlVolume(buffer) : asciiStlVolume(await file.text());
+
+  if (isLikelyBinaryStl(buffer)) {
+    try {
+      return binaryStlVolume(buffer);
+    } catch (error) {
+      return asciiStlVolume(await file.text());
+    }
+  }
+
+  return asciiStlVolume(await file.text());
 }
 
-function isBinaryStl(buffer) {
+function isLikelyBinaryStl(buffer) {
   if (buffer.byteLength < 84) return false;
 
   const view = new DataView(buffer);
   const triangleCount = view.getUint32(80, true);
-  return 84 + triangleCount * 50 === buffer.byteLength;
+  const expectedSize = 84 + triangleCount * 50;
+  return triangleCount > 0 && expectedSize <= buffer.byteLength;
 }
 
 function binaryStlVolume(buffer) {
   const view = new DataView(buffer);
   const triangleCount = view.getUint32(80, true);
+  const expectedSize = 84 + triangleCount * 50;
+
+  if (triangleCount <= 0 || expectedSize > buffer.byteLength) {
+    throw new Error('Invalid binary STL mesh');
+  }
+
   let offset = 84;
   let signedVolume = 0;
 
@@ -489,6 +509,107 @@ function binaryStlVolume(buffer) {
   }
 
   return Math.abs(signedVolume);
+}
+
+async function read3dmVolume(file) {
+  const rhino = await loadRhino3dm();
+  const buffer = await file.arrayBuffer();
+  const model = rhino.File3dm.fromByteArray(new Uint8Array(buffer));
+
+  if (!model) {
+    throw new Error('Invalid 3DM file');
+  }
+
+  const meshes = collectRhinoMeshes(rhino, model);
+  if (meshes.length === 0) {
+    throw new Error('No mesh data found in this 3DM. Export from Rhino as STL, or save the 3DM with render meshes.');
+  }
+
+  const signedVolume = meshes.reduce((total, mesh) => total + rhinoMeshSignedVolume(mesh), 0);
+  return Math.abs(signedVolume);
+}
+
+function loadRhino3dm() {
+  if (window.rhino3dm) {
+    return window.rhino3dm();
+  }
+
+  if (!rhino3dmModulePromise) {
+    rhino3dmModulePromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/rhino3dm@8.17.0/rhino3dm.min.js';
+      script.async = true;
+      script.onload = () => {
+        if (!window.rhino3dm) {
+          reject(new Error('Rhino 3DM scanner failed to load'));
+          return;
+        }
+
+        window.rhino3dm().then(resolve).catch(reject);
+      };
+      script.onerror = () => reject(new Error('Rhino 3DM scanner failed to load'));
+      document.head.appendChild(script);
+    });
+  }
+
+  return rhino3dmModulePromise;
+}
+
+function collectRhinoMeshes(rhino, model) {
+  const meshes = [];
+  const objects = model.objects();
+
+  for (let index = 0; index < objects.count; index += 1) {
+    const item = objects.get(index);
+    const geometry = item.geometry();
+
+    if (!geometry) continue;
+
+    if (geometry.objectType === rhino.ObjectType.Mesh) {
+      meshes.push(geometry);
+    } else if (geometry.objectType === rhino.ObjectType.Brep) {
+      const faces = geometry.faces();
+      for (let faceIndex = 0; faceIndex < faces.count; faceIndex += 1) {
+        const face = faces.get(faceIndex);
+        const mesh = face.getMesh(rhino.MeshType.Render) || face.getMesh(rhino.MeshType.Any);
+        if (mesh) meshes.push(mesh);
+      }
+    } else if (geometry.objectType === rhino.ObjectType.Extrusion) {
+      const mesh = geometry.getMesh(rhino.MeshType.Render) || geometry.getMesh(rhino.MeshType.Any);
+      if (mesh) meshes.push(mesh);
+    }
+  }
+
+  return meshes;
+}
+
+function rhinoMeshSignedVolume(mesh) {
+  const vertices = mesh.vertices();
+  const faces = mesh.faces();
+  let signedVolume = 0;
+
+  for (let index = 0; index < faces.count; index += 1) {
+    const face = faces.get(index);
+    const a = rhinoPoint(vertices.get(face[0]));
+    const b = rhinoPoint(vertices.get(face[1]));
+    const c = rhinoPoint(vertices.get(face[2]));
+    signedVolume += tetrahedronVolume(a, b, c);
+
+    if (face[3] !== face[2]) {
+      const d = rhinoPoint(vertices.get(face[3]));
+      signedVolume += tetrahedronVolume(a, c, d);
+    }
+  }
+
+  return signedVolume;
+}
+
+function rhinoPoint(point) {
+  return {
+    x: point[0],
+    y: point[1],
+    z: point[2]
+  };
 }
 
 function readStlVertex(view, offset) {
@@ -619,7 +740,7 @@ function resetForm() {
   });
 
   cadFileInput.value = '';
-  cadFileStatus.textContent = 'Upload an STL file to auto-fill volume, or enter Rhino volume manually.';
+  cadFileStatus.textContent = 'Upload an STL or mesh-based 3DM file to auto-fill volume, or enter Rhino volume manually.';
   fields.volume.value = '';
   fields.volume.disabled = true;
 
