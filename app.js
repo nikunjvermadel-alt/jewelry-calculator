@@ -1,31 +1,14 @@
 // Configuration - works for both localhost and deployed URLs
 const API_URL = `${window.location.origin}/api`;
+const PROJECTS_KEY = 'jewelryCalculatorProjects';
 
 // State
-let currentUser = null;
 let currentProjectId = null;
 let projects = [];
 let latestEstimate = {};
 
 // DOM Elements
-const authScreen = document.getElementById('authScreen');
 const appScreen = document.getElementById('appScreen');
-const loginForm = document.getElementById('loginForm');
-const signupForm = document.getElementById('signupForm');
-const forgotPasswordForm = document.getElementById('forgotPasswordForm');
-const resetPasswordForm = document.getElementById('resetPasswordForm');
-const loginButton = document.getElementById('loginButton');
-const signupButton = document.getElementById('signupButton');
-const forgotPasswordButton = document.getElementById('forgotPasswordButton');
-const resetPasswordButton = document.getElementById('resetPasswordButton');
-const logoutButton = document.getElementById('logoutButton');
-const loginError = document.getElementById('loginError');
-const signupError = document.getElementById('signupError');
-const forgotError = document.getElementById('forgotError');
-const forgotSuccess = document.getElementById('forgotSuccess');
-const resetError = document.getElementById('resetError');
-const resetSuccess = document.getElementById('resetSuccess');
-const currentUsername = document.getElementById('currentUsername');
 const projectSelector = document.getElementById('projectSelector');
 const newProjectButton = document.getElementById('newProjectButton');
 const deleteProjectButton = document.getElementById('deleteProjectButton');
@@ -87,16 +70,10 @@ const output = {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
-  checkAuth();
+  initializeApp();
 });
 
 function setupEventListeners() {
-  // Auth
-  loginButton.addEventListener('click', handleLogin);
-  signupButton.addEventListener('click', handleSignup);
-  forgotPasswordButton.addEventListener('click', handleForgotPassword);
-  resetPasswordButton.addEventListener('click', handleResetPassword);
-  logoutButton.addEventListener('click', handleLogout);
   newProjectButton.addEventListener('click', createNewProject);
   deleteProjectButton.addEventListener('click', deleteCurrentProject);
   saveProjectButton.addEventListener('click', saveProject);
@@ -111,144 +88,13 @@ function setupEventListeners() {
   document.getElementById('metalType').addEventListener('change', calculate);
 }
 
-// Auth Functions
-async function handleLogin() {
-  const email = document.getElementById('loginEmail').value.trim().toLowerCase();
-  const password = document.getElementById('loginPassword').value;
-
-  if (!email || !password) {
-    loginError.textContent = 'Please fill in all fields';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error);
-    }
-
-    const data = await response.json();
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('userId', data.userId);
-    localStorage.setItem('username', data.username);
-    
-    currentUser = { id: data.userId, username: data.username };
-    showApp();
-    await loadProjects();
-  } catch (error) {
-    loginError.textContent = error.message;
-  }
-}
-
-async function handleSignup() {
-  const username = document.getElementById('signupUsername').value.trim();
-  const email = document.getElementById('signupEmail').value.trim().toLowerCase();
-  const password = document.getElementById('signupPassword').value;
-
-  if (!username || !email || !password) {
-    signupError.textContent = 'Please fill in all fields';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/auth/signup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, password })
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      const message = error.error === 'Email or username already exists'
-        ? 'Account already exists. Please log in or use Forgot password.'
-        : error.error;
-      throw new Error(message);
-    }
-
-    const data = await response.json();
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('userId', data.userId);
-    localStorage.setItem('username', data.username);
-    
-    currentUser = { id: data.userId, username: data.username };
-    showApp();
-    await loadProjects();
-  } catch (error) {
-    signupError.textContent = error.message;
-  }
-}
-
-function handleLogout() {
-  localStorage.removeItem('token');
-  localStorage.removeItem('userId');
-  localStorage.removeItem('username');
-  currentUser = null;
-  currentProjectId = null;
-  projects = [];
-  currentUsername.textContent = '';
-  showAuth();
+function initializeApp() {
+  appScreen.classList.remove('hidden');
   clearForm();
-}
-
-async function checkAuth() {
-  const token = localStorage.getItem('token');
-  const username = localStorage.getItem('username');
-
-  if (token && username) {
-    try {
-      const response = await fetch(`${API_URL}/auth/profile`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (!response.ok) {
-        throw new Error('Session expired');
-      }
-
-      const user = await response.json();
-      currentUser = { id: user.id, username: user.username };
-      localStorage.setItem('userId', user.id);
-      localStorage.setItem('username', user.username);
-      showApp();
-      await loadProjects();
-    } catch (error) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('userId');
-      localStorage.removeItem('username');
-      currentUser = null;
-      showAuth();
-      checkResetQuery();
-    }
-  } else {
-    showAuth();
-    checkResetQuery();
-  }
+  loadProjects();
 }
 
 // UI Functions
-function showAuth() {
-  authScreen.style.display = 'flex';
-  appScreen.classList.add('hidden');
-  loginForm.classList.add('active');
-  signupForm.classList.remove('active');
-  forgotPasswordForm.classList.remove('active');
-  resetPasswordForm.classList.remove('active');
-}
-
-function showApp() {
-  authScreen.style.display = 'none';
-  appScreen.classList.remove('hidden');
-  currentUsername.textContent = currentUser.username;
-  clearForm();
-  projectSelector.value = 'new';
-  deleteProjectButton.style.display = 'none';
-}
-
 function showNotification(message, type = 'success') {
   const notification = document.getElementById('notification');
   notification.textContent = message;
@@ -260,20 +106,21 @@ function showNotification(message, type = 'success') {
 }
 
 // Project Functions
-async function loadProjects() {
+function readStoredProjects() {
   try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${API_URL}/projects`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (!response.ok) throw new Error('Failed to load projects');
-
-    projects = await response.json();
-    updateProjectSelector();
+    return JSON.parse(localStorage.getItem(PROJECTS_KEY)) || [];
   } catch (error) {
-    showNotification(error.message, 'error');
+    return [];
   }
+}
+
+function writeStoredProjects(nextProjects) {
+  localStorage.setItem(PROJECTS_KEY, JSON.stringify(nextProjects));
+}
+
+function loadProjects() {
+  projects = readStoredProjects();
+  updateProjectSelector();
 }
 
 function updateProjectSelector() {
@@ -287,40 +134,30 @@ function updateProjectSelector() {
   });
 }
 
-async function createNewProject() {
+function createNewProject() {
   const projectName = prompt('Enter project name:');
   if (!projectName) return;
 
-  try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${API_URL}/projects`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        projectName,
-        formData: getFormData(),
-        estimate: latestEstimate
-      })
-    });
+  const now = new Date().toISOString();
+  const newProject = {
+    id: String(Date.now()),
+    projectName,
+    formData: getFormData(),
+    estimate: latestEstimate,
+    createdAt: now,
+    updatedAt: now
+  };
 
-    if (!response.ok) throw new Error('Failed to create project');
-
-    const newProject = await response.json();
-    currentProjectId = newProject.id;
-    await loadProjects();
-    projectSelector.value = currentProjectId;
-    deleteProjectButton.style.display = 'inline-block';
-    showNotification(`Project "${projectName}" created successfully`);
-    resetForm();
-  } catch (error) {
-    showNotification(error.message, 'error');
-  }
+  projects = [newProject, ...readStoredProjects()];
+  writeStoredProjects(projects);
+  currentProjectId = newProject.id;
+  updateProjectSelector();
+  projectSelector.value = currentProjectId;
+  deleteProjectButton.style.display = 'inline-block';
+  showNotification(`Project "${projectName}" created successfully`);
 }
 
-async function loadProject(e) {
+function loadProject(e) {
   const projectId = e.target.value;
 
   if (projectId === 'new') {
@@ -330,91 +167,62 @@ async function loadProject(e) {
     return;
   }
 
-  try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${API_URL}/projects/${projectId}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (!response.ok) throw new Error('Failed to load project');
-
-    const project = await response.json();
-    currentProjectId = project.id;
-    deleteProjectButton.style.display = 'inline-block';
-
-    // Load form data
-    Object.entries(project.formData).forEach(([key, value]) => {
-      if (fields[key]) {
-        fields[key].value = value;
-      }
-    });
-
-    // Load estimate if available
-    if (project.estimate) {
-      latestEstimate = project.estimate;
-    }
-
-    calculate();
-  } catch (error) {
-    showNotification(error.message, 'error');
+  const project = readStoredProjects().find((item) => item.id === projectId);
+  if (!project) {
+    showNotification('Failed to load project', 'error');
     projectSelector.value = 'new';
+    return;
   }
+
+  currentProjectId = project.id;
+  deleteProjectButton.style.display = 'inline-block';
+
+  Object.entries(project.formData || {}).forEach(([key, value]) => {
+    if (fields[key]) {
+      fields[key].value = value;
+    }
+  });
+
+  if (project.estimate) {
+    latestEstimate = project.estimate;
+  }
+
+  calculate();
 }
 
-async function saveProject() {
+function saveProject() {
   if (!currentProjectId) {
     showNotification('Please create or select a project first', 'error');
     return;
   }
 
-  try {
-    const token = localStorage.getItem('token');
-    const formData = getFormData();
-    
-    const response = await fetch(`${API_URL}/projects/${currentProjectId}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        projectName: projects.find(p => p.id === currentProjectId)?.projectName || 'Untitled',
-        formData,
-        estimate: latestEstimate
-      })
-    });
-
-    if (!response.ok) throw new Error('Failed to save project');
-
-    showNotification('Project saved successfully');
-  } catch (error) {
-    showNotification(error.message, 'error');
-  }
+  projects = readStoredProjects().map((project) => project.id === currentProjectId
+    ? {
+        ...project,
+        formData: getFormData(),
+        estimate: latestEstimate,
+        updatedAt: new Date().toISOString()
+      }
+    : project);
+  writeStoredProjects(projects);
+  updateProjectSelector();
+  projectSelector.value = currentProjectId;
+  showNotification('Project saved successfully');
 }
 
-async function deleteCurrentProject() {
+function deleteCurrentProject() {
   if (!currentProjectId) return;
 
   if (!confirm('Are you sure you want to delete this project?')) return;
 
-  try {
-    const token = localStorage.getItem('token');
-    const response = await fetch(`${API_URL}/projects/${currentProjectId}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-
-    if (!response.ok) throw new Error('Failed to delete project');
-
-    currentProjectId = null;
-    deleteProjectButton.style.display = 'none';
-    await loadProjects();
-    projectSelector.value = 'new';
-    resetForm();
-    showNotification('Project deleted successfully');
-  } catch (error) {
-    showNotification(error.message, 'error');
-  }
+  projects = readStoredProjects().filter((project) => project.id !== currentProjectId);
+  writeStoredProjects(projects);
+  currentProjectId = null;
+  deleteProjectButton.style.display = 'none';
+  loadProjects();
+  projectSelector.value = 'new';
+  resetForm();
+  showNotification('Project deleted successfully');
 }
 
 // Calculator Functions
@@ -797,151 +605,6 @@ function clearForm() {
   projectSelector.value = 'new';
   currentProjectId = null;
   deleteProjectButton.style.display = 'none';
-}
-
-// Helper for switching auth forms
-function switchToSignup() {
-  loginForm.classList.remove('active');
-  forgotPasswordForm.classList.remove('active');
-  resetPasswordForm.classList.remove('active');
-  signupForm.classList.add('active');
-  loginError.textContent = '';
-  forgotError.textContent = '';
-  forgotSuccess.textContent = '';
-  resetError.textContent = '';
-  resetSuccess.textContent = '';
-}
-
-function switchToLogin() {
-  signupForm.classList.remove('active');
-  forgotPasswordForm.classList.remove('active');
-  resetPasswordForm.classList.remove('active');
-  loginForm.classList.add('active');
-  signupError.textContent = '';
-  forgotError.textContent = '';
-  forgotSuccess.textContent = '';
-  resetError.textContent = '';
-  resetSuccess.textContent = '';
-}
-
-function showForgotPassword() {
-  loginForm.classList.remove('active');
-  signupForm.classList.remove('active');
-  resetPasswordForm.classList.remove('active');
-  forgotPasswordForm.classList.add('active');
-  loginError.textContent = '';
-  signupError.textContent = '';
-  resetError.textContent = '';
-  resetSuccess.textContent = '';
-}
-
-function showResetForm() {
-  loginForm.classList.remove('active');
-  signupForm.classList.remove('active');
-  forgotPasswordForm.classList.remove('active');
-  resetPasswordForm.classList.add('active');
-  loginError.textContent = '';
-  signupError.textContent = '';
-  forgotError.textContent = '';
-  forgotSuccess.textContent = '';
-}
-
-async function handleForgotPassword() {
-  const email = document.getElementById('forgotEmail').value.trim().toLowerCase();
-  const password = document.getElementById('forgotPassword').value;
-  const confirmPassword = document.getElementById('forgotConfirmPassword').value;
-  forgotError.textContent = '';
-  forgotSuccess.textContent = '';
-
-  if (!email) {
-    forgotError.textContent = 'Please enter your email';
-    return;
-  }
-
-  if (!password || !confirmPassword) {
-    forgotError.textContent = 'Please enter and confirm your new password.';
-    return;
-  }
-
-  if (password !== confirmPassword) {
-    forgotError.textContent = 'Passwords do not match.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/auth/forgot-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Unable to update password');
-    }
-
-    forgotSuccess.textContent = data.message || 'Password updated. You can now log in.';
-    document.getElementById('forgotPassword').value = '';
-    document.getElementById('forgotConfirmPassword').value = '';
-  } catch (error) {
-    forgotError.textContent = error.message;
-  }
-}
-
-async function handleResetPassword() {
-  const token = getQueryParam('resetToken');
-  const password = document.getElementById('resetPassword').value;
-  const confirmPassword = document.getElementById('resetConfirmPassword').value;
-
-  resetError.textContent = '';
-  resetSuccess.textContent = '';
-
-  if (!token) {
-    resetError.textContent = 'Reset token is missing. Please use the link sent to your email.';
-    return;
-  }
-
-  if (!password || !confirmPassword) {
-    resetError.textContent = 'Please enter and confirm your new password.';
-    return;
-  }
-
-  if (password !== confirmPassword) {
-    resetError.textContent = 'Passwords do not match.';
-    return;
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/auth/reset-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, password })
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || 'Unable to reset password');
-    }
-
-    resetSuccess.textContent = data.message || 'Password reset successfully. You can now log in.';
-    setTimeout(() => {
-      switchToLogin();
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }, 1500);
-  } catch (error) {
-    resetError.textContent = error.message;
-  }
-}
-
-function getQueryParam(name) {
-  return new URLSearchParams(window.location.search).get(name);
-}
-
-function checkResetQuery() {
-  const token = getQueryParam('resetToken');
-  if (token) {
-    showResetForm();
-  }
 }
 
 // Initial calculation

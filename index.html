@@ -7,115 +7,14 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Auth Screen -->
-  <div id="authScreen" class="auth-screen">
-    <div class="auth-container">
-      <div class="auth-logo">
-        <p class="eyebrow">Studio Tool</p>
-        <h1>Jewelry Calculator</h1>
-      </div>
-
-      <!-- Login Form -->
-      <div id="loginForm" class="auth-form active">
-        <h2>Log in to your account</h2>
-        <div class="form-group">
-          <label for="loginEmail">Email</label>
-          <input id="loginEmail" type="email" placeholder="you@example.com">
-        </div>
-        <div class="form-group">
-          <label for="loginPassword">Password</label>
-          <input id="loginPassword" type="password" placeholder="••••••••">
-        </div>
-        <button id="loginButton" class="btn btn-primary">Log in</button>
-        <div id="loginError" class="error-message"></div>
-        <p class="auth-switch">
-          <button type="button" class="link-button" onclick="showForgotPassword()">Forgot password?</button>
-        </p>
-        <p class="auth-switch">
-          Don't have an account? 
-          <button type="button" class="link-button" onclick="switchToSignup()">Create one</button>
-        </p>
-      </div>
-
-      <!-- Forgot Password Form -->
-      <div id="forgotPasswordForm" class="auth-form">
-        <h2>Reset your password</h2>
-        <div class="form-group">
-          <label for="forgotEmail">Email</label>
-          <input id="forgotEmail" type="email" placeholder="you@example.com">
-        </div>
-        <div class="form-group">
-          <label for="forgotPassword">New password</label>
-          <input id="forgotPassword" type="password" placeholder="••••••••">
-        </div>
-        <div class="form-group">
-          <label for="forgotConfirmPassword">Confirm password</label>
-          <input id="forgotConfirmPassword" type="password" placeholder="••••••••">
-        </div>
-        <button id="forgotPasswordButton" class="btn btn-primary">Save new password</button>
-        <div id="forgotError" class="error-message"></div>
-        <div id="forgotSuccess" class="success-message"></div>
-        <p class="auth-switch">
-          <button type="button" class="link-button" onclick="switchToLogin()">Back to log in</button>
-        </p>
-      </div>
-
-      <!-- Reset Password Form -->
-      <div id="resetPasswordForm" class="auth-form">
-        <h2>Create a new password</h2>
-        <div class="form-group">
-          <label for="resetPassword">New password</label>
-          <input id="resetPassword" type="password" placeholder="••••••••">
-        </div>
-        <div class="form-group">
-          <label for="resetConfirmPassword">Confirm password</label>
-          <input id="resetConfirmPassword" type="password" placeholder="••••••••">
-        </div>
-        <button id="resetPasswordButton" class="btn btn-primary">Reset password</button>
-        <div id="resetError" class="error-message"></div>
-        <div id="resetSuccess" class="success-message"></div>
-        <p class="auth-switch">
-          <button type="button" class="link-button" onclick="switchToLogin()">Back to log in</button>
-        </p>
-      </div>
-
-      <!-- Signup Form -->
-      <div id="signupForm" class="auth-form">
-        <h2>Create your account</h2>
-        <div class="form-group">
-          <label for="signupUsername">Username</label>
-          <input id="signupUsername" type="text" placeholder="your_username">
-        </div>
-        <div class="form-group">
-          <label for="signupEmail">Email</label>
-          <input id="signupEmail" type="email" placeholder="you@example.com">
-        </div>
-        <div class="form-group">
-          <label for="signupPassword">Password</label>
-          <input id="signupPassword" type="password" placeholder="••••••••">
-        </div>
-        <button id="signupButton" class="btn btn-primary">Create account</button>
-        <div id="signupError" class="error-message"></div>
-        <p class="auth-switch">
-          Already have an account? 
-          <button type="button" class="link-button" onclick="switchToLogin()">Log in</button>
-        </p>
-      </div>
-    </div>
-  </div>
-
   <!-- Main App Screen -->
-  <div id="appScreen" class="app-screen hidden">
+  <div id="appScreen" class="app-screen">
     <!-- Header -->
     <header class="header">
       <div class="header-content">
         <div class="logo">
           <p class="eyebrow">Studio Tool</p>
           <h1>Jewelry Pricing Calculator</h1>
-        </div>
-        <div class="user-menu">
-          <span id="currentUsername" class="username"></span>
-          <button id="logoutButton" class="btn btn-secondary">Log out</button>
         </div>
       </div>
     </header>
